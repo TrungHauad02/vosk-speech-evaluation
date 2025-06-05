@@ -1,0 +1,16 @@
+version: "3"
+
+services:
+  speech-evaluation-api:
+    build: .
+    image: speech-evaluation-app:latest
+    container_name: speech-evaluation-api
+    ports:
+      - "7860:7860"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - SITE_URL=http://localhost:7860
+      - SITE_NAME=Speech Evaluation App
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
