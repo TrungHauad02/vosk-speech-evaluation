@@ -10,27 +10,85 @@ def evaluate_speech(wf, model, expected_text=""):
     rec = KaldiRecognizer(model, wf.getframerate())
     rec.SetWords(True)
     
-    # Process audio
-    results = []
+    # Use larger chunk size for better processing
+    chunk_size = 8192 
+    
+    # Reset file position to beginning
+    wf.rewind()
+    
+    # Process audio and collect all transcripts
+    partial_results = []
+    all_word_results = []
+    transcript_parts = []
+    
+    print(f"Processing audio - Sample rate: {wf.getframerate()}, Total frames: {wf.getnframes()}")
+    
     while True:
-        data = wf.readframes(4000)
+        data = wf.readframes(chunk_size)
         if len(data) == 0:
             break
+            
         if rec.AcceptWaveform(data):
+            # Get partial result
             part_result = json.loads(rec.Result())
+            
+            # Collect transcript text
+            if "text" in part_result and part_result["text"]:
+                transcript_parts.append(part_result["text"])
+                print(f"Partial transcript: {part_result['text']}")
+            
+            # Collect word results
             if "result" in part_result:
-                results.extend(part_result["result"])
+                all_word_results.extend(part_result["result"])
+                partial_results.append(part_result)
     
-    # Get final result
+    # Get final result - IMPORTANT: This may contain additional text
     final_result = json.loads(rec.FinalResult())
-    if "result" in final_result:
-        results.extend(final_result["result"])
     
-    transcript = final_result.get("text", "")
+    # Add final transcript if exists
+    if "text" in final_result and final_result["text"]:
+        transcript_parts.append(final_result["text"])
+        print(f"Final transcript: {final_result['text']}")
+    
+    # Add final word results
+    if "result" in final_result:
+        all_word_results.extend(final_result["result"])
+    
+    # Combine all transcript parts
+    full_transcript = " ".join(transcript_parts).strip()
+    
+    # If still no transcript, try alternative method
+    if not full_transcript and not all_word_results:
+        print("No transcript found with standard method, trying alternative...")
+        
+        # Reset and try processing entire file at once
+        wf.rewind()
+        rec2 = KaldiRecognizer(model, wf.getframerate())
+        rec2.SetWords(True)
+        
+        # Read all data
+        all_data = wf.readframes(wf.getnframes())
+        
+        # Process all at once
+        if rec2.AcceptWaveform(all_data):
+            result = json.loads(rec2.Result())
+            full_transcript = result.get("text", "")
+            if "result" in result:
+                all_word_results = result["result"]
+        
+        # Get final result
+        final = json.loads(rec2.FinalResult())
+        if not full_transcript and "text" in final:
+            full_transcript = final["text"]
+        if "result" in final and not all_word_results:
+            all_word_results = final["result"]
+    
+    print(f"Full transcript ({len(full_transcript)} chars): {full_transcript}")
+    print(f"Total words detected: {len(all_word_results)}")
     
     # Analyze results
     word_scores = []
-    for word_info in results:
+    for word_info in all_word_results:
         word_scores.append({
             "word": word_info["word"],
             "confidence": word_info["conf"],
@@ -45,14 +103,14 @@ def evaluate_speech(wf, model, expected_text=""):
         avg_confidence = 0.0
     
     # Evaluate relevance to the topic
-    relevance_score = evaluate_relevance(transcript, expected_text) if expected_text else 0.5
+    relevance_score = evaluate_relevance(full_transcript, expected_text) if expected_text else 0.5
     
     # Calculate rhythm and intonation scores if enough words
     rhythm_score = evaluate_rhythm(word_scores) if len(word_scores) > 3 else 0.5
     intonation_score = evaluate_intonation(word_scores) if len(word_scores) > 3 else 0.5
     
     # Additional speech quality metrics
-    speech_rate_score = evaluate_speech_rate(word_scores, transcript) if word_scores else 0.5
+    speech_rate_score = evaluate_speech_rate(word_scores, full_transcript) if word_scores else 0.5
     
     # Calculate total score with weighted factors
     if expected_text:
@@ -80,7 +138,7 @@ def evaluate_speech(wf, model, expected_text=""):
         "rhythm_score": f"{rhythm_score * 10:.1f}",
         "intonation_score": f"{intonation_score * 10:.1f}",
         "speech_rate_score": f"{speech_rate_score * 10:.1f}",
-        "transcript": transcript,
+        "transcript": full_transcript,
         "expected_text": expected_text if expected_text else "",
         "word_details": word_scores,
         "overall_confidence": avg_confidence,
